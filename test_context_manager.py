@@ -1,4 +1,5 @@
 import inspect
+import re
 
 import pytest
 
@@ -11,6 +12,7 @@ import pytest
 # Helpers
 ########################################################################################
 
+
 def print_stdout_header():
     caller_name = inspect.stack()[1].function
     print()
@@ -20,6 +22,7 @@ def print_stdout_header():
 
 # 1. メソッドに __enter__() と __exit__() を持つクラスを定義する
 ########################################################################################
+
 
 class ExampleClass:
     """
@@ -79,6 +82,7 @@ def test_use_ExampleClass_as_context_manager(capsys):
             raise ValueError("ValueError occured.")
         print("@end with block")
 
+
 def test_context_manager_after_instantiate(capsys):
     """
     オブジェクト初期化後にコンテクストマネージャーとして使っても処理に変化はない
@@ -97,15 +101,16 @@ def test_context_manager_after_instantiate(capsys):
 # 2. ジェネレータとcontextlib.contextmanagerデコレータを使う
 ########################################################################################
 
-from contextlib import contextmanager
+import contextlib
 
 
 class SomeClass:
     def run(self):
         print("run")
 
-@contextmanager
-def example_generator():
+
+@contextlib.contextmanager
+def some_generator():
     """
     with文でこの関数をコンテキストマネージャとして使う。
     yield文までのコードがwithブロックに入った直後に実行され、
@@ -134,6 +139,7 @@ def example_generator():
         """
         print("Exiting")
 
+
 def test_contextmanager_generator(capsys):
     """
     標準出力に以下の内容が出力される。
@@ -148,7 +154,143 @@ def test_contextmanager_generator(capsys):
     with capsys.disabled():
         print_stdout_header()
         print("@start with block")
-        with example_generator() as some:
+        with some_generator() as some:
             some.run()
             raise ValueError("ValueError occured.")
+        print("@end with block")
+
+
+# 以下、ジェネレータとcontextlib.contextmanagerデコレータについての解説
+########################################################################################
+
+
+@contextlib.contextmanager
+def example_generator():
+    print('code before yield "hoge"')
+    yield "hoge"
+    print('code after yield "hoge"')
+
+
+def test_contextlib_contextmanager_1():
+    """
+    contextlib.contextmanager 関数
+    この関数をyield文を使うジェネレータ関数のデコレータとして使うと、
+    そのジェネレータ関数はジェネレータオブジェクトではなく、
+    __enter__()と__enter__()を実装したコンテキストマネージャを返すようになる
+
+    コンテキストマネージャとは、
+    contextlib.AbstractContextManager抽象クラスを実装するオブジェクトである
+
+    ※contextlib.contextmanager 関数でデコレートするジェネレータ関数は、
+    必ず値を1つyieldしなければならない
+    """
+    cm = example_generator()
+    assert isinstance(cm, contextlib.AbstractContextManager)
+    assert (
+        re.match(r"<contextlib._GeneratorContextManager object at 0x.{12}>", repr(cm))
+        is not None
+    )
+
+
+def test_contextlib_contextmanager_2(capsys):
+    """
+    contextlib.contextmanagerでデコレートしたジェネレータ関数から
+    返されるコンテキストマネージャをwith文で使うと、
+    以下のような流れで処理が行われる。
+
+    1. まず、ジェネレータ関数内のyield文までの処理が実行され、
+    2. with文のasで指定した変数にyield式の値が渡される
+    3. その後、withブロック内の処理が実行され、
+    4. withブロックを抜けると、ジェネレータ関数内のyield文の後から処理が再開される
+
+    本テストコードでは以下のテキストが標準出力される
+    @start with block
+    code before yield "hoge"
+    code in with block
+    value hoge was passed from yield statement
+    code after yield "hoge"
+    @end with block
+    """
+    cm = example_generator()
+    with capsys.disabled():
+        print_stdout_header()
+        print("@start with block")
+        with cm as yielded:
+            print("code in with block")
+            print(f"value {yielded} was passed from yield statement")
+        print("@end with block")
+
+
+def test_contextlib_contextmanager_3(capsys):
+    """
+    注意点1
+    withブロック内で例外が発生し、かつ処理していない場合、
+    その時点でジェネレータ関数内のyield文の箇所に制御が戻り、
+    再度同じ例外が発生する（その後withブロックに制御は戻らない）
+
+    この時、ジェネレータ関数側で例外を処理しなければ
+    withブロックの外側に例外が再送出される。
+    また、yield文の後のコードは実行されない。
+
+    このテストコードでは以下のテキストが標準出力される。
+    @start with block
+    code before yield "hoge"
+    code before exception in with block
+    """
+    cm = example_generator()
+    with capsys.disabled():
+        print_stdout_header()
+        print("@start with block")
+        with pytest.raises(Exception):  # Exception例外を捕捉
+            with cm:
+                print("code before exception in with block")
+                raise Exception()  # yield "hoge" で再度Exception()が発生
+                print("code after exception in with block")  # 実行されない
+            print("@end with block")  # 実行されない
+
+
+@contextlib.contextmanager
+def example_generator_handle_exception():
+    print('code before yield "hoge"')
+    try:
+        yield "hoge"
+    except Exception:
+        print("catching exception in generator function")
+    finally:
+        print('code after yield "hoge" in finally block')
+
+
+def test_contextlib_contextmanager_4(capsys):
+    """
+    withブロック内で発生した例外をジェネレータ関数側で処理するには、
+    yield文をtry...except構文で囲む。
+
+    この時、exceptブロックから例外を再送出しない場合、
+    withブロックに例外が処理済みであることが伝えられ、
+    withブロックを抜けた直後のコードから実行を再開する。
+
+    exceptブロックから例外を再送出する場合は、
+    test_contextlib_contextmanager_3の場合と同様に、
+    withブロックの外側に例外が送出される
+
+    また、yield文の後のコードをfinallyブロックに移すことで、
+    例外発生の有無にかかわらず確実に後処理を実行させることができる
+    （リソースの開放処理など）
+
+    このテストコードでは以下のテキストが標準出力される
+    @start with block
+    code before yield "hoge"
+    code before exception in with block
+    Catching exception in generator function
+    code after yield "hoge" in finally block
+    @end with block
+    """
+    cm = example_generator_handle_exception()
+    with capsys.disabled():
+        print_stdout_header()
+        print("@start with block")
+        with cm:
+            print("code before exception in with block")
+            raise Exception()  # yield "hoge" で再度Exception()が発生
+            print("code after exception in with block")  # 実行されない
         print("@end with block")
