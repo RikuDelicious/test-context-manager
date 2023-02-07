@@ -294,3 +294,22 @@ def test_contextlib_contextmanager_4(capsys):
             raise Exception()  # yield "hoge" で再度Exception()が発生
             print("code after exception in with block")  # 実行されない
         print("@end with block")
+
+@contextlib.contextmanager
+def example_generator_handle_exception_re_raise():
+    try:
+        yield "hoge"
+    except Exception:
+        raise Exception("re-raise")
+    finally:
+        print('code after yield "hoge" in finally block')
+
+def test_contextlib_contextmanager_5(capsys):
+    """
+    withブロック内で発生した例外をジェネレータ関数側で捕捉して
+    再送出する場合のテスト
+    """
+    cm = example_generator_handle_exception_re_raise()
+    with pytest.raises(Exception, match="re-raise"):
+        with cm:
+            raise Exception("raise from with block")
